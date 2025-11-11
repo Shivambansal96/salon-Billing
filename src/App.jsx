@@ -6,7 +6,7 @@ import './App.css';
 import { CustomersTable } from './components/CustomersTable';
 import { RecentTransactionsTable } from './components/RecentTransactionsTable';
 import BillPage from './pages/BillPage.jsx';
-import './storage-mock';
+import { getAllCustomers, getCustomer, getRecentBills, initializeMemberships, initializeStaff, saveBill, saveCustomer } from './utils/firebaseUtils';
 
 // Load service catalog from data.json
 let serviceCatalog = { women: [], men: [] };
@@ -23,64 +23,10 @@ const loadServiceCatalog = async () => {
   }
 };
 
-// Storage helper functions
-const saveData = async (key, value, shared = false) => {
-  try {
-    const result = await window.storage.set(key, JSON.stringify(value), shared);
-    return result !== null;
-  } catch (error) {
-    console.error('Storage error:', error);
-    return false;
-  }
-};
-
-const getData = async (key, shared = false) => {
-  try {
-    const result = await window.storage.get(key, shared);
-    return result ? JSON.parse(result.value) : null;
-  } catch (error) {
-    return null;
-  }
-};
-
-const listKeys = async (prefix, shared = false) => {
-  try {
-    const result = await window.storage.list(prefix, shared);
-    return result ? result.keys : [];
-  } catch (error) {
-    return [];
-  }
-};
-
 // Phone number validation
 const validatePhoneNumber = (phone) => {
   const phoneRegex = /^[0-9]{10}$/;
   return phoneRegex.test(phone);
-};
-
-// Initialize default data
-const initializeData = async () => {
-  const memberships = await getData('salon_memberships');
-  if (!memberships) {
-    await saveData('salon_memberships', [
-      { id: 1, name: 'Green Card', discount: 10, price: 3000, validityMonths: 12 },
-      { id: 2, name: 'Service Card', servicesNum: 6, services: 'services', timesNum: 12, times: 'times', price: 5000 }
-    ]);
-  }
-
-  const staff = await getData('salon_staff');
-  if (!staff) {
-    await saveData('salon_staff', [
-      { id: 1, name: 'Vicky' },
-      { id: 2, name: 'Rakhi' },
-      { id: 3, name: 'Akash' },
-      { id: 4, name: 'Komal' },
-      { id: 5, name: 'Babul' },
-      { id: 6, name: 'Nishu' },
-      { id: 7, name: 'Nabin' },
-      { id: 8, name: 'Rushan' }
-    ]);
-  }
 };
 
 // Service category priority ordering
@@ -110,6 +56,7 @@ function SalonBillingSystem() {
   const [transactions, setTransactions] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [selectedCustomerDetail, setSelectedCustomerDetail] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   // Billing form state
   const [customerName, setCustomerName] = useState('');
@@ -149,32 +96,35 @@ function SalonBillingSystem() {
   // Toast state
   const [toast, setToast] = useState(null);
 
+  // Initial data load from Firebase
   useEffect(() => {
     const loadData = async () => {
-      await loadServiceCatalog();
-      await initializeData();
-      const loadedStaff = await getData('salon_staff') || [];
-      const loadedMemberships = await getData('salon_memberships') || [];
+      setLoading(true);
+      try {
+        await loadServiceCatalog();
+        
+        // Initialize config data (staff, memberships) in Firebase
+        const loadedStaff = await initializeStaff();
+        const loadedMemberships = await initializeMemberships();
+        
+        setStaff(loadedStaff);
+        setMemberships(loadedMemberships);
 
-      setStaff(loadedStaff);
-      setMemberships(loadedMemberships);
+        // Load transactions from Firebase
+        const txData = await getRecentBills();
+        setTransactions(txData.sort((a, b) => new Date(b.date) - new Date(a.date)));
 
-      const txKeys = await listKeys('tx_');
-      const txData = [];
-      for (const key of txKeys) {
-        const tx = await getData(key);
-        if (tx) txData.push(tx);
+        // Load customers from Firebase
+        const custData = await getAllCustomers();
+        setCustomers(custData);
+      } catch (error) {
+        console.error('Error loading data:', error);
+        showToast('Error loading data from Firebase', 'error');
+      } finally {
+        setLoading(false);
       }
-      setTransactions(txData.sort((a, b) => new Date(b.date) - new Date(a.date)));
-
-      const custKeys = await listKeys('cust_');
-      const custData = [];
-      for (const key of custKeys) {
-        const cust = await getData(key);
-        if (cust) custData.push(cust);
-      }
-      setCustomers(custData);
     };
+
     loadData();
   }, []);
 
@@ -213,7 +163,6 @@ function SalonBillingSystem() {
         const today = new Date();
         const expiry = new Date(expiryDate);
         if (expiry >= today) {
-          // Valid Green Card - apply automatically
           setIsGreenCard(true);
           const updated = selectedServices.map(s => ({
             ...s,
@@ -225,7 +174,6 @@ function SalonBillingSystem() {
           showToast('Customer has expired Green Card', 'info');
         }
       } else {
-        // No expiry date set, apply anyway
         setIsGreenCard(true);
         const updated = selectedServices.map(s => ({
           ...s,
@@ -287,7 +235,6 @@ function SalonBillingSystem() {
   const calculateTotal = () => {
     const servicesTotal = selectedServices.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
 
-    // Add membership purchase cost if applicable
     let membershipCost = 0;
     if (purchaseMembership) {
       const membership = memberships.find(m => m.id === parseInt(purchaseMembership));
@@ -382,113 +329,111 @@ function SalonBillingSystem() {
       return;
     }
 
-    const totals = calculateTotal();
-    const txId = 'tx_' + Date.now();
-    const custId = phoneNumber ? 'cust_' + phoneNumber : 'cust_' + Date.now();
+    try {
+      const totals = calculateTotal();
+      const txId = 'tx_' + Date.now();
+      const custId = phoneNumber ? 'cust_' + phoneNumber : 'cust_' + Date.now();
 
-    const transaction = {
-      id: txId,
-      customerId: custId,
-      customerName,
-      phoneNumber,
-      dob,
-      date: new Date().toISOString(),
-      paymentMode: paymentMode,
-      upiMethod: upiMethod,
-      upiOtherText: otherUpiNote,
-      services: selectedServices,
-      membership: isGreenCard ? 'Green Card' : null,
-      purchasedMembership: purchaseMembership
-        ? memberships.find(m => m.id === parseInt(purchaseMembership))
-        : null,
-      totals,
-      total: totals.total,
-      printed: shouldPrint
-    };
-
-    await saveData(txId, transaction);
-
-    let customer = await getData(custId);
-    if (!customer) {
-      customer = {
-        id: custId,
-        name: customerName,
-        phone: phoneNumber,
-        dob: dob,
-        visits: [],
-        totalSpent: 0,
-        membershipOwned: null,
-        serviceCardUsages: []
+      const transaction = {
+        id: txId,
+        customerId: custId,
+        customerName,
+        phoneNumber,
+        dob,
+        date: new Date().toISOString(),
+        paymentMode: paymentMode,
+        upiMethod: upiMethod,
+        upiOtherText: otherUpiNote,
+        services: selectedServices,
+        membership: isGreenCard ? 'Green Card' : null,
+        purchasedMembership: purchaseMembership
+          ? memberships.find(m => m.id === parseInt(purchaseMembership))
+          : null,
+        totals,
+        total: totals.total,
+        printed: shouldPrint
       };
-    }
 
-    if (isGreenCard && !customer.membershipOwned) {
-      customer.membershipOwned = {
-        membershipId: 1,
-        membershipName: 'Green Card'
-      };
-    }
+      // ✅ SAVE TO FIREBASE
+      await saveBill(transaction);
 
-    // Handle membership purchase
-    if (purchaseMembership) {
-      const membership = memberships.find(m => m.id === parseInt(purchaseMembership));
-      if (membership) {
-        if (membership.name === 'Green Card') {
-          const expiryDate = membershipExpiry || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0];
-          customer.membershipOwned = {
-            membershipId: membership.id,
-            membershipName: membership.name,
-            cardNumber: membershipCardNumber,
-            dateOfIssue: membershipDoi,
-            expiryDate: expiryDate
-          };
+      let customer = await getCustomer(custId);
+      if (!customer) {
+        customer = {
+          id: custId,
+          name: customerName,
+          phone: phoneNumber,
+          dob: dob,
+          visits: [],
+          totalSpent: 0,
+          membershipOwned: null,
+          serviceCardUsages: []
+        };
+      }
+
+      if (isGreenCard && !customer.membershipOwned) {
+        customer.membershipOwned = {
+          membershipId: 1,
+          membershipName: 'Green Card'
+        };
+      }
+
+      // Handle membership purchase
+      if (purchaseMembership) {
+        const membership = memberships.find(m => m.id === parseInt(purchaseMembership));
+        if (membership) {
+          if (membership.name === 'Green Card') {
+            const expiryDate = membershipExpiry || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0];
+            customer.membershipOwned = {
+              membershipId: membership.id,
+              membershipName: membership.name,
+              cardNumber: membershipCardNumber,
+              dateOfIssue: membershipDoi,
+              expiryDate: expiryDate
+            };
+          }
         }
       }
-    }
 
-    customer.visits.push(txId);
-    customer.totalSpent += totals.total;
-    customer.lastVisit = new Date().toISOString();
+      customer.visits.push(txId);
+      customer.totalSpent += totals.total;
+      customer.lastVisit = new Date().toISOString();
 
-    if (purchaseMembership === '2') {
-      if (!customer.serviceCardUsages) {
-        customer.serviceCardUsages = [];
-      }
-      selectedServices.forEach(s => {
-        customer.serviceCardUsages.push({
-          service: s.serviceName,
-          category: s.category,
-          staffName: s.staffName,
-          date: new Date().toISOString(),
-          gender: s.gender
+      if (purchaseMembership === '2') {
+        if (!customer.serviceCardUsages) {
+          customer.serviceCardUsages = [];
+        }
+        selectedServices.forEach(s => {
+          customer.serviceCardUsages.push({
+            service: s.serviceName,
+            category: s.category,
+            staffName: s.staffName,
+            date: new Date().toISOString(),
+            gender: s.gender
+          });
         });
-      });
+      }
+
+      // ✅ SAVE CUSTOMER TO FIREBASE
+      await saveCustomer(customer);
+
+      if (shouldPrint) {
+        printBill();
+      }
+
+      // Refresh data from Firebase
+      const updatedTxs = await getRecentBills();
+      setTransactions(updatedTxs.sort((a, b) => new Date(b.date) - new Date(a.date)));
+
+      const updatedCustomers = await getAllCustomers();
+      setCustomers(updatedCustomers);
+
+      resetForm();
+      showToast(shouldPrint ? 'Bill printed and saved to Firebase!' : 'Data saved to Firebase!');
+    } catch (error) {
+      console.error('Error saving transaction:', error);
+      showToast('Error saving transaction', 'error');
     }
-
-    await saveData(custId, customer);
-
-    if (shouldPrint) {
-      printBill();
-    }
-
-    const txKeys = await listKeys('tx_');
-    const txData = [];
-    for (const key of txKeys) {
-      const tx = await getData(key);
-      if (tx) txData.push(tx);
-    }
-    setTransactions(txData.sort((a, b) => new Date(b.date) - new Date(a.date)));
-
-    const custKeys = await listKeys('cust_');
-    const custData = [];
-    for (const key of custKeys) {
-      const cust = await getData(key);
-      if (cust) custData.push(cust);
-    }
-    setCustomers(custData);
-
-    resetForm();
-    showToast(shouldPrint ? 'Bill printed and data saved!' : 'Data saved successfully!');
   };
 
   const printBill = () => {
@@ -497,136 +442,6 @@ function SalonBillingSystem() {
     printWindow.document.write('<html><head><title>Print Bill</title><style>@media print {@page {size: 58mm auto;margin: 0;}}body {width: 58mm;margin: 0;padding: 2mm;font-family: "Courier New", monospace;font-size: 10px;line-height: 1.3;}pre {margin: 0;white-space: pre-wrap;word-wrap: break-word;}</style></head><body><pre>' + billContent + '</pre><script>window.onload = function() {window.print();setTimeout(function() { window.close(); }, 100);};</script></body></html>');
     printWindow.document.close();
   };
-
-  // const sendBillToWhatsApp = async () => {
-  //   if (!phoneNumber || !validatePhoneNumber(phoneNumber)) {
-  //     showToast('Please enter a valid 10-digit phone number', 'error');
-  //     return;
-  //   }
-
-  //   if (selectedServices.length === 0) {
-  //     showToast('Please add at least one service', 'error');
-  //     return;
-  //   }
-
-  //   const totals = calculateTotal();
-  //   const txId = 'tx_' + Date.now();
-  //   const custId = phoneNumber ? 'cust_' + phoneNumber : 'cust_' + Date.now();
-
-  //   const transaction = {
-  //     id: txId,
-  //     customerId: custId,
-  //     customerName,
-  //     phoneNumber,
-  //     dob,
-  //     date: new Date().toISOString(),
-  //     paymentMode,
-  //     upiMethod,
-  //     upiOtherText: otherUpiNote,
-  //     services: selectedServices,
-  //     membership: isGreenCard ? 'Green Card' : null,
-  //     purchasedMembership: purchaseMembership
-  //       ? memberships.find(m => m.id === parseInt(purchaseMembership))
-  //       : null,
-  //     totals,
-  //     total: totals.total,
-  //     printed: false
-  //   };
-
-  //   await saveData(txId, transaction);
-
-  //   let customer = await getData(custId);
-  //   if (!customer) {
-  //     customer = {
-  //       id: custId,
-  //       name: customerName,
-  //       phone: phoneNumber,
-  //       dob: dob,
-  //       visits: [],
-  //       totalSpent: 0,
-  //       membershipOwned: null,
-  //       serviceCardUsages: []
-  //     };
-  //   }
-
-  //   if (isGreenCard && !customer.membershipOwned) {
-  //     customer.membershipOwned = {
-  //       membershipId: 1,
-  //       membershipName: 'Green Card'
-  //     };
-  //   }
-
-  //   // Handle membership purchase
-  //   if (purchaseMembership) {
-  //     const membership = memberships.find(m => m.id === parseInt(purchaseMembership));
-  //     if (membership) {
-  //       if (membership.name === 'Green Card') {
-  //         const expiryDate = membershipExpiry || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0];
-  //         customer.membershipOwned = {
-  //           membershipId: membership.id,
-  //           membershipName: membership.name,
-  //           cardNumber: membershipCardNumber,
-  //           dateOfIssue: membershipDoi,
-  //           expiryDate: expiryDate
-  //         };
-  //       }
-  //     }
-  //   }
-
-  //   customer.visits.push(txId);
-  //   customer.totalSpent += totals.total;
-  //   customer.lastVisit = new Date().toISOString();
-
-  //   if (purchaseMembership === '2') {
-  //     if (!customer.serviceCardUsages) {
-  //       customer.serviceCardUsages = [];
-  //     }
-  //     selectedServices.forEach(s => {
-  //       customer.serviceCardUsages.push({
-  //         service: s.serviceName,
-  //         category: s.category,
-  //         staffName: s.staffName,
-  //         date: new Date().toISOString(),
-  //         gender: s.gender
-  //       });
-  //     });
-  //   }
-
-  //   await saveData(custId, customer);
-
-  //   const baseURL = window.location.origin;
-  //   // const baseURL = 'greatlookslgbilling.vercel.app';
-  //   const billPageUrl = `${baseURL}/bill/${txId}`;
-
-  //   // WhatsApp message with clickable link
-  //   const billMessage = `Dear ${customerName},\n\nHere is your invoice from *GREAT LOOK Professional Unisex Studio* for a total of *₹${totals.total.toFixed(2)}*.\n\nTo view your bill in detail, click here:\n${billPageUrl}\n\nThank you for your business! 🙏`;
-
-  //   const whatsappNumber = '91' + phoneNumber;
-  //   const encodedMessage = encodeURIComponent(billMessage);
-  //   const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedMessage}`;
-
-  //   window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
-
-  //   const txKeys = await listKeys('tx_');
-  //   const txData = [];
-  //   for (const key of txKeys) {
-  //     const tx = await getData(key);
-  //     if (tx) txData.push(tx);
-  //   }
-  //   setTransactions(txData.sort((a, b) => new Date(b.date) - new Date(a.date)));
-
-  //   const custKeys = await listKeys('cust_');
-  //   const custData = [];
-  //   for (const key of custKeys) {
-  //     const cust = await getData(key);
-  //     if (cust) custData.push(cust);
-  //   }
-  //   setCustomers(custData);
-
-  //   resetForm();
-  //   showToast('Bill link sent to WhatsApp!', 'success');
-  // };
-
 
   const sendBillToWhatsApp = async () => {
     if (!phoneNumber || !validatePhoneNumber(phoneNumber)) {
@@ -639,129 +454,120 @@ function SalonBillingSystem() {
       return;
     }
 
-    const totals = calculateTotal();
-    const txId = 'tx_' + Date.now();
-    const custId = phoneNumber ? 'cust_' + phoneNumber : 'cust_' + Date.now();
+    try {
+      const totals = calculateTotal();
+      const txId = 'tx_' + Date.now();
+      const custId = phoneNumber ? 'cust_' + phoneNumber : 'cust_' + Date.now();
 
-    const transaction = {
-      id: txId,
-      customerId: custId,
-      customerName,
-      phoneNumber,
-      dob,
-      date: new Date().toISOString(),
-      paymentMode,
-      upiMethod,
-      upiOtherText: otherUpiNote,
-      services: selectedServices,
-      membership: isGreenCard ? 'Green Card' : null,
-      purchasedMembership: purchaseMembership
-        ? memberships.find(m => m.id === parseInt(purchaseMembership))
-        : null,
-      totals,
-      total: totals.total,
-      printed: false
-    };
-
-    // Save to local storage for users on same device
-    await saveData(txId, transaction);
-
-    let customer = await getData(custId);
-    if (!customer) {
-      customer = {
-        id: custId,
-        name: customerName,
-        phone: phoneNumber,
-        dob: dob,
-        visits: [],
-        totalSpent: 0,
-        membershipOwned: null,
-        serviceCardUsages: []
+      const transaction = {
+        id: txId,
+        customerId: custId,
+        customerName,
+        phoneNumber,
+        dob,
+        date: new Date().toISOString(),
+        paymentMode,
+        upiMethod,
+        upiOtherText: otherUpiNote,
+        services: selectedServices,
+        membership: isGreenCard ? 'Green Card' : null,
+        purchasedMembership: purchaseMembership
+          ? memberships.find(m => m.id === parseInt(purchaseMembership))
+          : null,
+        totals,
+        total: totals.total,
+        printed: false
       };
-    }
 
-    if (isGreenCard && !customer.membershipOwned) {
-      customer.membershipOwned = {
-        membershipId: 1,
-        membershipName: 'Green Card'
-      };
-    }
+      // ✅ SAVE BILL TO FIREBASE
+      await saveBill(transaction);
 
-    if (purchaseMembership) {
-      const membership = memberships.find(m => m.id === parseInt(purchaseMembership));
-      if (membership) {
-        if (membership.name === 'Green Card') {
-          const expiryDate = membershipExpiry || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0];
-          customer.membershipOwned = {
-            membershipId: membership.id,
-            membershipName: membership.name,
-            cardNumber: membershipCardNumber,
-            dateOfIssue: membershipDoi,
-            expiryDate: expiryDate
-          };
+      let customer = await getCustomer(custId);
+      if (!customer) {
+        customer = {
+          id: custId,
+          name: customerName,
+          phone: phoneNumber,
+          dob: dob,
+          visits: [],
+          totalSpent: 0,
+          membershipOwned: null,
+          serviceCardUsages: []
+        };
+      }
+
+      if (isGreenCard && !customer.membershipOwned) {
+        customer.membershipOwned = {
+          membershipId: 1,
+          membershipName: 'Green Card'
+        };
+      }
+
+      if (purchaseMembership) {
+        const membership = memberships.find(m => m.id === parseInt(purchaseMembership));
+        if (membership) {
+          if (membership.name === 'Green Card') {
+            const expiryDate = membershipExpiry || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0];
+            customer.membershipOwned = {
+              membershipId: membership.id,
+              membershipName: membership.name,
+              cardNumber: membershipCardNumber,
+              dateOfIssue: membershipDoi,
+              expiryDate: expiryDate
+            };
+          }
         }
       }
-    }
 
-    customer.visits.push(txId);
-    customer.totalSpent += totals.total;
-    customer.lastVisit = new Date().toISOString();
+      customer.visits.push(txId);
+      customer.totalSpent += totals.total;
+      customer.lastVisit = new Date().toISOString();
 
-    if (purchaseMembership === '2') {
-      if (!customer.serviceCardUsages) {
-        customer.serviceCardUsages = [];
-      }
-      selectedServices.forEach(s => {
-        customer.serviceCardUsages.push({
-          service: s.serviceName,
-          category: s.category,
-          staffName: s.staffName,
-          date: new Date().toISOString(),
-          gender: s.gender
+      if (purchaseMembership === '2') {
+        if (!customer.serviceCardUsages) {
+          customer.serviceCardUsages = [];
+        }
+        selectedServices.forEach(s => {
+          customer.serviceCardUsages.push({
+            service: s.serviceName,
+            category: s.category,
+            staffName: s.staffName,
+            date: new Date().toISOString(),
+            gender: s.gender
+          });
         });
-      });
+      }
+
+      // ✅ SAVE CUSTOMER TO FIREBASE
+      await saveCustomer(customer);
+
+      // ✅ PRODUCTION DOMAIN - Bill will work anywhere
+      const baseURL = 'https://greatlookslgbilling.vercel.app';
+      const billPageUrl = `${baseURL}/bill/${txId}`;
+
+      // WhatsApp message with clickable link
+      const billMessage = `Dear ${customerName},\n\nHere is your invoice from *GREAT LOOK Professional Unisex Studio* for a total of *₹${totals.total.toFixed(2)}*.\n\nTo view your bill in detail, click here:\n${billPageUrl}\n\nThank you for your business! 🙏`;
+
+      const whatsappNumber = '91' + phoneNumber;
+      const encodedMessage = encodeURIComponent(billMessage);
+      const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedMessage}`;
+
+      window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+
+      // Refresh data from Firebase
+      const updatedTxs = await getRecentBills();
+      setTransactions(updatedTxs.sort((a, b) => new Date(b.date) - new Date(a.date)));
+
+      const updatedCustomers = await getAllCustomers();
+      setCustomers(updatedCustomers);
+
+      resetForm();
+      showToast('Bill link sent to WhatsApp!', 'success');
+    } catch (error) {
+      console.error('Error sending WhatsApp:', error);
+      showToast('Error sending bill to WhatsApp', 'error');
     }
-
-    await saveData(custId, customer);
-
-    // ✅ Use explicit production domain
-    const baseURL = 'https://greatlookslgbilling.vercel.app'; // Change to your actual domain
-    const billPageUrl = `${baseURL}/bill/${txId}`;
-
-    // Encode transaction data in URL as backup
-    const billDataEncoded = encodeURIComponent(JSON.stringify(transaction));
-    const billPageUrlWithData = `${baseURL}/bill/${txId}?data=${billDataEncoded}`;
-
-    // WhatsApp message with clickable link
-    const billMessage = `Dear ${customerName},\n\nHere is your invoice from *GREAT LOOK Professional Unisex Studio* for a total of *₹${totals.total.toFixed(2)}*.\n\nTo view your bill in detail, click here:\n${billPageUrl}\n\nThank you for your business! 🙏`;
-
-    const whatsappNumber = '91' + phoneNumber;
-    const encodedMessage = encodeURIComponent(billMessage);
-    const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedMessage}`;
-
-    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
-
-    const txKeys = await listKeys('tx_');
-    const txData = [];
-    for (const key of txKeys) {
-      const tx = await getData(key);
-      if (tx) txData.push(tx);
-    }
-    setTransactions(txData.sort((a, b) => new Date(b.date) - new Date(a.date)));
-
-    const custKeys = await listKeys('cust_');
-    const custData = [];
-    for (const key of custKeys) {
-      const cust = await getData(key);
-      if (cust) custData.push(cust);
-    }
-    setCustomers(custData);
-
-    resetForm();
-    showToast('Bill link sent to WhatsApp!', 'success');
   };
-
-
 
   const resetForm = () => {
     setCustomerName('');
@@ -959,6 +765,15 @@ function SalonBillingSystem() {
     const totals = calculateTotal();
     const categories = getCategories();
     const servicesByCategory = getServicesByCategory();
+
+    if (loading) {
+      return (
+        <div className="main-content">
+          <h1 className="page-title">Loading...</h1>
+          <p>Please wait while we load your data from Firebase...</p>
+        </div>
+      );
+    }
 
     return (
       <div className="main-content">
@@ -1509,8 +1324,7 @@ function SalonBillingSystem() {
                       </ul>
                     ) : (
                       <p className="text-sm text-gray-500">No services</p>
-                    )}
-                  </div>
+                    )}</div>
                 </div>
                 {tx.membership && (
                   <div className="mt-3" style={{ paddingTop: '0.75rem', borderTop: '1px solid #e5e7eb' }}>
