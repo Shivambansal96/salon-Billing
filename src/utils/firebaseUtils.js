@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
+
 // ===== TRANSACTIONS =====
 export const saveBill = async (transaction) => {
   try {

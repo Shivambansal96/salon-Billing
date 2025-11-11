@@ -6,7 +6,7 @@ import './App.css';
 import { CustomersTable } from './components/CustomersTable';
 import { RecentTransactionsTable } from './components/RecentTransactionsTable';
 import BillPage from './pages/BillPage.jsx';
-import { getAllCustomers, getCustomer, getRecentBills, initializeMemberships, initializeStaff, saveBill, saveCustomer } from './utils/firebaseUtils';
+import { getAllCustomers, getCustomer, getRecentBills, initializeMemberships, initializeStaff, saveBill, saveCustomer } from './utils/firebaseUtils.js';
 
 // Load service catalog from data.json
 let serviceCatalog = { women: [], men: [] };
