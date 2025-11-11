@@ -1,10 +1,10 @@
 import { Box, Button, CircularProgress, Container, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { getBill, getCustomer } from "../utils/firebaseUtils";
+import { useParams, useSearchParams } from "react-router-dom";
 
 function BillPage() {
   const { transactionId } = useParams();
+  const [searchParams] = useSearchParams();
   const [transaction, setTransaction] = useState(null);
   const [customer, setCustomer] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -15,37 +15,59 @@ function BillPage() {
       setLoading(true);
       setError(null);
       try {
-        // ✅ Load transaction from Firebase only
-        const tx = await getBill(transactionId);
+        let tx = null;
+        let cust = null;
 
+        // ✅ First, try to get data from URL parameter (for shared links)
+        const dataParam = searchParams.get('data');
+        if (dataParam) {
+          try {
+            tx = JSON.parse(decodeURIComponent(dataParam));
+            console.log('✅ Loaded bill data from URL parameter');
+          } catch (err) {
+            console.warn('Could not parse URL data:', err);
+          }
+        }
+
+        // ✅ If no URL data, try to get from localStorage (same device)
+        if (!tx) {
+          try {
+            const txData = await window.storage.get(transactionId, false);
+            if (txData?.value) {
+              tx = typeof txData.value === "string"
+                ? JSON.parse(txData.value)
+                : txData.value;
+              console.log('✅ Loaded bill data from localStorage');
+            }
+          } catch (err) {
+            console.warn('Could not load from localStorage:', err);
+          }
+        }
+
+        // ✅ If still no transaction, show error
         if (!tx) {
           setError('Bill not found. This link may have expired or is invalid.');
           setTransaction(null);
           setCustomer(null);
-          setLoading(false);
           return;
         }
 
         setTransaction(tx);
 
-        // ✅ Try to load customer data from Firebase
+        // ✅ Try to load customer data
         if (tx.customerId) {
           try {
-            const cust = await getCustomer(tx.customerId);
-            if (cust) {
+            const customerData = await window.storage.get(tx.customerId, false);
+            if (customerData?.value) {
+              cust = typeof customerData.value === "string"
+                ? JSON.parse(customerData.value)
+                : customerData.value;
               setCustomer(cust);
-              console.log('✅ Loaded customer data from Firebase');
-            } else if (tx.customerName) {
-              // Fallback to transaction data if customer not found
-              setCustomer({
-                name: tx.customerName,
-                phone: tx.phoneNumber,
-                dob: tx.dob
-              });
+              console.log('✅ Loaded customer data from localStorage');
             }
           } catch (err) {
             console.warn('Could not load customer:', err);
-            // Use customer info from transaction
+            // Use customer info from transaction if localStorage fails
             if (tx.customerName) {
               setCustomer({
                 name: tx.customerName,
@@ -71,8 +93,12 @@ function BillPage() {
     };
 
     loadTransaction();
-  }, [transactionId]);
+  }, [transactionId, searchParams]);
 
+
+
+
+  
   const getServices = (tx) =>
     Array.isArray(tx?.services)
       ? tx.services
