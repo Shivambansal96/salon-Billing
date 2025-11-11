@@ -186,9 +186,9 @@ function SalonBillingSystem() {
   // Handle customer name autocomplete
   const handleCustomerNameChange = (value) => {
     setCustomerName(value);
-    
+
     if (value.length > 0) {
-      const filtered = customers.filter(c => 
+      const filtered = customers.filter(c =>
         c.name && c.name.toLowerCase().includes(value.toLowerCase())
       );
       setFilteredCustomers(filtered);
@@ -205,7 +205,7 @@ function SalonBillingSystem() {
     setPhoneNumber(customer.phone || '');
     setDob(customer.dob || '');
     setShowSuggestions(false);
-    
+
     // Check if customer has valid Green Card
     if (customer.membershipOwned && customer.membershipOwned.membershipName === 'Green Card') {
       const expiryDate = customer.membershipOwned.expiryDate;
@@ -286,7 +286,7 @@ function SalonBillingSystem() {
 
   const calculateTotal = () => {
     const servicesTotal = selectedServices.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
-    
+
     // Add membership purchase cost if applicable
     let membershipCost = 0;
     if (purchaseMembership) {
@@ -295,7 +295,7 @@ function SalonBillingSystem() {
         membershipCost = membership.price;
       }
     }
-    
+
     const subtotal = servicesTotal + membershipCost;
     let discount = 0;
     const discountValue = parseFloat(additionalDiscount) || 0;
@@ -498,6 +498,136 @@ function SalonBillingSystem() {
     printWindow.document.close();
   };
 
+  // const sendBillToWhatsApp = async () => {
+  //   if (!phoneNumber || !validatePhoneNumber(phoneNumber)) {
+  //     showToast('Please enter a valid 10-digit phone number', 'error');
+  //     return;
+  //   }
+
+  //   if (selectedServices.length === 0) {
+  //     showToast('Please add at least one service', 'error');
+  //     return;
+  //   }
+
+  //   const totals = calculateTotal();
+  //   const txId = 'tx_' + Date.now();
+  //   const custId = phoneNumber ? 'cust_' + phoneNumber : 'cust_' + Date.now();
+
+  //   const transaction = {
+  //     id: txId,
+  //     customerId: custId,
+  //     customerName,
+  //     phoneNumber,
+  //     dob,
+  //     date: new Date().toISOString(),
+  //     paymentMode,
+  //     upiMethod,
+  //     upiOtherText: otherUpiNote,
+  //     services: selectedServices,
+  //     membership: isGreenCard ? 'Green Card' : null,
+  //     purchasedMembership: purchaseMembership
+  //       ? memberships.find(m => m.id === parseInt(purchaseMembership))
+  //       : null,
+  //     totals,
+  //     total: totals.total,
+  //     printed: false
+  //   };
+
+  //   await saveData(txId, transaction);
+
+  //   let customer = await getData(custId);
+  //   if (!customer) {
+  //     customer = {
+  //       id: custId,
+  //       name: customerName,
+  //       phone: phoneNumber,
+  //       dob: dob,
+  //       visits: [],
+  //       totalSpent: 0,
+  //       membershipOwned: null,
+  //       serviceCardUsages: []
+  //     };
+  //   }
+
+  //   if (isGreenCard && !customer.membershipOwned) {
+  //     customer.membershipOwned = {
+  //       membershipId: 1,
+  //       membershipName: 'Green Card'
+  //     };
+  //   }
+
+  //   // Handle membership purchase
+  //   if (purchaseMembership) {
+  //     const membership = memberships.find(m => m.id === parseInt(purchaseMembership));
+  //     if (membership) {
+  //       if (membership.name === 'Green Card') {
+  //         const expiryDate = membershipExpiry || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0];
+  //         customer.membershipOwned = {
+  //           membershipId: membership.id,
+  //           membershipName: membership.name,
+  //           cardNumber: membershipCardNumber,
+  //           dateOfIssue: membershipDoi,
+  //           expiryDate: expiryDate
+  //         };
+  //       }
+  //     }
+  //   }
+
+  //   customer.visits.push(txId);
+  //   customer.totalSpent += totals.total;
+  //   customer.lastVisit = new Date().toISOString();
+
+  //   if (purchaseMembership === '2') {
+  //     if (!customer.serviceCardUsages) {
+  //       customer.serviceCardUsages = [];
+  //     }
+  //     selectedServices.forEach(s => {
+  //       customer.serviceCardUsages.push({
+  //         service: s.serviceName,
+  //         category: s.category,
+  //         staffName: s.staffName,
+  //         date: new Date().toISOString(),
+  //         gender: s.gender
+  //       });
+  //     });
+  //   }
+
+  //   await saveData(custId, customer);
+
+  //   const baseURL = window.location.origin;
+  //   // const baseURL = 'greatlookslgbilling.vercel.app';
+  //   const billPageUrl = `${baseURL}/bill/${txId}`;
+
+  //   // WhatsApp message with clickable link
+  //   const billMessage = `Dear ${customerName},\n\nHere is your invoice from *GREAT LOOK Professional Unisex Studio* for a total of *₹${totals.total.toFixed(2)}*.\n\nTo view your bill in detail, click here:\n${billPageUrl}\n\nThank you for your business! 🙏`;
+
+  //   const whatsappNumber = '91' + phoneNumber;
+  //   const encodedMessage = encodeURIComponent(billMessage);
+  //   const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedMessage}`;
+
+  //   window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+
+  //   const txKeys = await listKeys('tx_');
+  //   const txData = [];
+  //   for (const key of txKeys) {
+  //     const tx = await getData(key);
+  //     if (tx) txData.push(tx);
+  //   }
+  //   setTransactions(txData.sort((a, b) => new Date(b.date) - new Date(a.date)));
+
+  //   const custKeys = await listKeys('cust_');
+  //   const custData = [];
+  //   for (const key of custKeys) {
+  //     const cust = await getData(key);
+  //     if (cust) custData.push(cust);
+  //   }
+  //   setCustomers(custData);
+
+  //   resetForm();
+  //   showToast('Bill link sent to WhatsApp!', 'success');
+  // };
+
+
   const sendBillToWhatsApp = async () => {
     if (!phoneNumber || !validatePhoneNumber(phoneNumber)) {
       showToast('Please enter a valid 10-digit phone number', 'error');
@@ -533,6 +663,7 @@ function SalonBillingSystem() {
       printed: false
     };
 
+    // Save to local storage for users on same device
     await saveData(txId, transaction);
 
     let customer = await getData(custId);
@@ -556,7 +687,6 @@ function SalonBillingSystem() {
       };
     }
 
-    // Handle membership purchase
     if (purchaseMembership) {
       const membership = memberships.find(m => m.id === parseInt(purchaseMembership));
       if (membership) {
@@ -594,17 +724,21 @@ function SalonBillingSystem() {
 
     await saveData(custId, customer);
 
-    // const baseURL = window.location.origin;
-    const baseURL = 'greatlookslgbilling.vercel.app';
+    // ✅ Use explicit production domain
+    const baseURL = 'https://greatlookslgbilling.vercel.app'; // Change to your actual domain
     const billPageUrl = `${baseURL}/bill/${txId}`;
-    
+
+    // Encode transaction data in URL as backup
+    const billDataEncoded = encodeURIComponent(JSON.stringify(transaction));
+    const billPageUrlWithData = `${baseURL}/bill/${txId}?data=${billDataEncoded}`;
+
     // WhatsApp message with clickable link
     const billMessage = `Dear ${customerName},\n\nHere is your invoice from *GREAT LOOK Professional Unisex Studio* for a total of *₹${totals.total.toFixed(2)}*.\n\nTo view your bill in detail, click here:\n${billPageUrl}\n\nThank you for your business! 🙏`;
 
     const whatsappNumber = '91' + phoneNumber;
     const encodedMessage = encodeURIComponent(billMessage);
     const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedMessage}`;
-    
+
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
 
     const txKeys = await listKeys('tx_');
@@ -626,6 +760,8 @@ function SalonBillingSystem() {
     resetForm();
     showToast('Bill link sent to WhatsApp!', 'success');
   };
+
+
 
   const resetForm = () => {
     setCustomerName('');
